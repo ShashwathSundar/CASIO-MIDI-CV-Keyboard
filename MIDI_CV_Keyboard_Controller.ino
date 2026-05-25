@@ -8,6 +8,7 @@
 
 #define eepromAddr 0
 #define defaultCalib 863
+#define CV_Channel 1 //CV output is only for channel 1
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 32
@@ -36,19 +37,20 @@ const byte rowPins[ROWS] = {10,11,12,A0,A1}; //connect to the row pinouts of the
 const byte colPins[COLS] = {2,3,4,5,6,7,8,9}; //connect to the column pinouts of the kpd
 byte octShift=0;
 byte channelread=1;
-byte octval[17]={0};
+byte octval[17]={0}; //store octave offset for each midi channel + CV channel
 bool channelselect=false;
 Keypad kpd = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS );
-int octCalib=863;
+int octCalib=863; //DAC caliberation value for setting 1V/Octave
 bool calibNotSaved=false;
-byte btnList[LIST_MAX+1]={0};
+byte btnList[LIST_MAX+1]={0}; //list of pressed buttons- only for the CV mode
 byte newPressPtr=0;
 MIDI_CREATE_DEFAULT_INSTANCE();
 void setup() {
-  MIDI.begin(MIDI_CHANNEL_OMNI);              // Launch MIDI with default option
- Serial.begin(115200);
-MIDI.setHandleNoteOn(midiOn);
-MIDI.setHandleNoteOff(midiOff);
+ MIDI.begin(MIDI_CHANNEL_OMNI);              // Launch MIDI with default option
+ Serial.begin(115200);              // override the default MIDI baudrate- comment this line if you want to use this with commercial MIDI gear
+ MIDI.setHandleNoteOn(midiOn);
+ MIDI.setHandleNoteOff(midiOff);
+ 
  dac.begin(0x60);
  octCalib=getCalib();
  pinMode(gate,OUTPUT);
@@ -57,15 +59,14 @@ MIDI.setHandleNoteOff(midiOff);
  updateScreen();
   }
 void loop() {
-
   octShift=octval[channelread]*12;
   MIDI.read();
      if (kpd.getKeys())
     {for (int i=0; i<LIST_MAX; i++)   // Scan the whole key list.
         {if ( kpd.key[i].stateChanged )   // Only find keys that have changed state.
-         {
+         {    //check for keyboard key presses----
               if(kpd.key[i].kchar>=17 and channelselect ==false){
-                    
+                    //if its in MIDI mode----
                   if(channelread>0){
                     switch (kpd.key[i].kstate) {  // Report active key state : IDLE, PRESSED, HOLD, or RELEASED
                       case PRESSED:
@@ -76,6 +77,7 @@ void loop() {
                       break;
                       }
                       }
+                //if itsin CV mode i.e. channel 0 ----
                   if(channelread==0){
                     switch (kpd.key[i].kstate) {  // Report active key state : IDLE, PRESSED, HOLD, or RELEASED
                       case PRESSED:
@@ -88,7 +90,7 @@ void loop() {
                       outputCV();
                   }
               }
-              
+              //if channel selection is enabled to change the MIDI channel----
               if(kpd.key[i].kchar>=17 and channelselect ==true and kpd.key[i].kstate==PRESSED)
               {  // Report active key state : IDLE, PRESSED, HOLD, or RELEASED
                 byte channelval=channelread;
@@ -107,8 +109,6 @@ void loop() {
                         
                         updateScreen();}
                         //Serial.println(channelval);
-                    
-                         
                  }
               if(kpd.key[i].kchar==1 and kpd.key[i].kstate==PRESSED and channelselect==false){// increment octave
                 if(channelread==0){
@@ -151,16 +151,16 @@ void loop() {
                       channelselect=false;
                       break;
                       }
-
-              }
-              if(kpd.key[i].kchar==4 and kpd.key[i].kstate==PRESSED and channelselect==false and channelread==0){// decrement Caliberation
+             }
+          
+             if(kpd.key[i].kchar==4 and kpd.key[i].kstate==PRESSED and channelselect==false and channelread==0){// decrement Caliberation
                 if(octCalib>0)
                   {octCalib-=1;
                     outputCV();
                     calibNotSaved=true;
                     updateScreen();}
               }
-              if(kpd.key[i].kchar==5 and kpd.key[i].kstate==PRESSED and channelselect==false and channelread==0){// increment Caliberation
+             if(kpd.key[i].kchar==5 and kpd.key[i].kstate==PRESSED and channelselect==false and channelread==0){// increment Caliberation
                 if(octCalib<4095)
                   {octCalib+=1;
                     outputCV();
@@ -186,7 +186,7 @@ void loop() {
           
 
 } //loop end
-
+//this function is called to update MIDI notes when you shift octaves while still holding a few keys----
 void switchkeys(bool noteOn){
   for (int i=0; i<LIST_MAX; i++)   // Scan the whole key list.
       { if(kpd.key[i].kchar>=17){
@@ -203,29 +203,34 @@ void switchkeys(bool noteOn){
       }
 }
 void midiOn(byte chn,byte note,byte vel){
-  CV_Press(note,true);
-  outputCV();
+  if(chn== CV_Channel)
+  {CV_Press(note,true);
+  outputCV();}
   }
 void midiOff(byte chn,byte note,byte vel){
-   CV_Press(note,false);
-  outputCV();
+if(chn== CV_Channel)
+ {CV_Press(note,false);
+  outputCV();}
   }
+//update CV button press list for last note priority----
 void CV_Press(byte btn, bool pres){
-  if(pres){
-    for(byte i=0;i<newPressPtr;i++){
+  if(pres){         //if the button was pressed
+    for(byte i=0;i<newPressPtr;i++){  //check if the pressed button is already in the button list (The logic might work even without this but imma not take any chances)
       if(btn==btnList[i])
         return;
        }
         
-      btnList[newPressPtr]=btn;
-      newPressPtr+=1;
-    }
-  else{
-    for(byte i=0;i<newPressPtr;i++)
+      btnList[newPressPtr]=btn;  //add button in the list if its not there
+      newPressPtr+=1; //increment pointer 
+    //wat happens when the pointer is larger than the array?? No idea!! please don't use this code if you have 11 fingers or more...
+    
+  }
+  else{            //if the button was released
+    for(byte i=0;i<newPressPtr;i++)   //look for the button in the button list and remove it
      {if(btn==btnList[i])
        {btnList[i]=0;
         newPressPtr-=1;
-          for(byte j=i;j<newPressPtr;j++)
+          for(byte j=i;j<newPressPtr;j++) //move all the buttons under the current location, one step up the list so new buttons can be added to the list later
               { btnList[j]=btnList[j+1];
                 btnList[j+1]=0;
                 }
@@ -244,15 +249,15 @@ void outputCV(){
       if(channelread>0)
         shift=0;
   int value=btnList[newPressPtr-1]-17+shift;
-  //Serial.println(value);
-  value=constrain(value, 0, 55);
-  value= map(value,0, 12, 0, octCalib);//map octave notes to 1 volt output 858 is the calibrated value to get 1 volt
+  
+  value=constrain(value, 0, 55); //the DAC cannot output more than ~4.5 volts with a 5V supply so need to constrain the keyboard to play only the first 56 notes
+  value= map(value,0, 12, 0, octCalib);//map 1st octave of notes to 1 volt output-- rest of the notes get scaled automatically
       dac.setVoltage(value,false);
       digitalWrite(gate,HIGH);
       
     }
 }
-void resetCV(){
+void resetCV(){ //set the gate low and remove all buttons from the CV button list
   digitalWrite(gate,LOW);
   for(byte i=0;i<newPressPtr;i++)
   btnList[i]=0;
@@ -287,6 +292,8 @@ void updateScreen(){
   display.drawRoundRect((SCREEN_WIDTH/3)+1,0,42,SCREEN_HEIGHT,display.height()/4, SSD1306_WHITE);
   display.display();
   }
+
+//Store the caliberated value for V/OCT in EEPROM----
 void storeCalib(){
 byte val=octCalib & 0x00ff;
 EEPROM.update(eepromAddr,val); //store LSB
